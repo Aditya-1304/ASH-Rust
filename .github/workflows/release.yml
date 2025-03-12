@@ -1,4 +1,4 @@
-name: Build & Release Binaries
+name: Build & Release ASH Shell
 
 on:
   push:
@@ -7,13 +7,24 @@ on:
 
 jobs:
   build:
+    name: Build for ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            artifact_name: ash-shell
+            asset_name: ash-shell-linux
+          - os: windows-latest
+            artifact_name: ash-shell.exe
+            asset_name: ash-shell-windows.exe
+          - os: macos-latest
+            artifact_name: ash-shell
+            asset_name: ash-shell-macos
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Set up Rust toolchain
         uses: actions-rs/toolchain@v1
@@ -24,34 +35,41 @@ jobs:
       - name: Build project
         run: cargo build --release
 
+      - name: Prepare binary
+        shell: bash
+        run: |
+          mkdir -p release-bin
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp target/release/${{ matrix.artifact_name }} release-bin/${{ matrix.asset_name }}
+          else
+            cp target/release/${{ matrix.artifact_name }} release-bin/${{ matrix.asset_name }}
+            chmod +x release-bin/${{ matrix.asset_name }}
+          fi
+
       - name: Upload artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
-          name: ash-shell-${{ matrix.os }}
-          path: target/release/ash-shell*
-  
+          name: ${{ matrix.asset_name }}
+          path: release-bin/${{ matrix.asset_name }}
+          retention-days: 1
+
   release:
+    name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: ./artifacts
 
-      - name: Create GitHub Release
-        id: create_release
+      - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.ref }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Release Assets
-        uses: softprops/action-gh-release@v1
-        with:
+          name: ASH Shell ${{ github.ref_name }}
           files: |
-            artifacts/**/*
+            ./artifacts/*/*
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
