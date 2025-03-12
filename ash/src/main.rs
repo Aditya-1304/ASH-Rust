@@ -1,12 +1,12 @@
 use std::env;
 use std::fs;
-use std::io::{self,BufRead};
+use std::io::{self,BufRead, Write};
 use std::path::Path;
 use std::process::exit;
 use chrono::Local;
 
 fn main() {
-    println!("Rush Shell - Fully Self-Contained");
+    println!("ASH Shell - Advanced Shell in Rust");
     loop {
         print_prompt();
         let input = read_input();
@@ -34,7 +34,11 @@ fn main() {
 }
 
 // Helper functions (same as before)
-fn print_prompt() { /* ... */ }
+fn print_prompt() { 
+    let current_dir = env::current_dir().unwrap();
+    print!("ASH$ {} > ", current_dir.display());
+    io::stdout().flush().unwrap();
+ }
 fn read_input() -> String {
     let mut input = String::new();
     io::stdin().read_line(&mut input).expect("Failed to read input");
