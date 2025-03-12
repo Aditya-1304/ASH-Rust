@@ -1,73 +1,199 @@
 use std::env;
 use std::fs;
-use std::io::{self,BufRead, Write};
-use std::path::Path;
+use std::io::{self, BufRead};
+use std::path::{Path, PathBuf};
 use std::process::exit;
 use chrono::Local;
+use dirs;
+use ctrlc;
+use rustyline::{Editor, error::ReadlineError};
+use rustyline::history::{FileHistory, History};
+use thiserror::Error;
+
+
+#[derive(Error, Debug)]
+enum ShellError {
+    #[error("I/O error: {0}")]
+    Io(#[from] io::Error),
+
+    #[error("Invalid argument: {0}")]
+    InvalidArgument(String),
+
+    #[error("Missing Arguments: {0}")]
+    MissingArguments(&'static str),
+
+    #[error("Command not found: {0}")]
+    CommandNotFound(String),
+
+    #[error("File not found: {0}")]
+    FileNotFound(String),
+    
+    #[error("Is a directory: {0}")]
+    IsDirectory(String),
+}
+
+type ShellResult<T> = Result<T, ShellError>;
 
 fn main() {
-    println!("ASH Shell - Advanced Shell in Rust");
+    println!("ASH Shell - Aditya's Shell in Rust");
+
+    let history_path = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".ash_history");
+
+    let mut rl = Editor::<(), FileHistory>::new().unwrap();
+    if rl.load_history(&history_path).is_err() {
+        eprintln!("No previous history found");
+    }
+
+    ctrlc::set_handler(move || {
+        println!("\nType 'exit' to quit or use history to view commands");
+    }).expect("Error setting Ctrl-C handler");
+    
     loop {
-        print_prompt();
-        let input = read_input();
-        let (command, args) = parse_input(&input);
-        
-        match command {
-            "" => continue,
-            "exit" => exit(0),
-            "cd" => cd(&args),
-            "help" => help(),
-            "ls" => ls(&args),
-            "cat" => cat(&args),
-            "mkdir" => mkdir(&args),
-            "touch" => touch(&args),
-            "rm" => rm(&args),
-            "cp" => cp(&args),
-            "mv" => mv(&args),
-            "grep" => grep(&args),
-            "pwd" => pwd(),
-            "echo" => echo(&args),
-            "date" => date(),
-            _ => println!("Command not found: {}", command),
+        match print_prompt(&mut rl) {
+            Ok(input) => {
+                if input.is_empty() {
+                    continue;
+                }
+                
+                // Add to history
+                let _ = rl.add_history_entry(&input);
+                
+                let (command, args) = parse_input(&input);
+                if let Err(e) = execute_command(command, &args, &mut rl) {
+                    handle_error(e, command, &args);
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                println!("^C");
+                continue;
+            }
+            Err(ReadlineError::Eof) => {
+                println!("exit");
+                break;
+            }
+            Err(err) => {
+                eprintln!("Readline error: {}", err);
+                break;
+            }
         }
+    }
+
+    
+    
+    rl.save_history(&history_path)
+        .unwrap_or_else(|e| eprintln!("Failed to save history: {}", e));
+}
+
+fn handle_error(error: ShellError, command: &str, _args: &[&str]) {
+    match error {
+        ShellError::Io(e) => {
+            eprintln!("Error in {}: {}", command, e);
+            if e.kind() == io::ErrorKind::PermissionDenied {
+                eprintln!("Try running with elevated privileges");
+            }
+        }
+        ShellError::InvalidArgument(msg) => {
+            eprintln!("Invalid argument: {}", msg);
+            eprintln!("Usage: {}", get_command_usage(command));
+        }
+        ShellError::MissingArguments(arg) => {
+            eprintln!("Missing required argument: {}", arg);
+            eprintln!("Usage: {}", get_command_usage(command));
+        }
+        ShellError::FileNotFound(path) => {
+            eprintln!("File not found: {}", path);
+            eprintln!("Check the path and try again");
+        }
+        ShellError::IsDirectory(path) => {
+            eprintln!("Is a directory: {}", path);
+            eprintln!("Did you mean to use a file instead?");
+        }
+        e => eprintln!("{}", e),
     }
 }
 
-// Helper functions (same as before)
-fn print_prompt() { 
-    let current_dir = env::current_dir().unwrap();
-    print!("ASH$ {} > ", current_dir.display());
-    io::stdout().flush().unwrap();
- }
-fn read_input() -> String {
+fn get_command_usage(command: &str) -> &'static str {
+    match command {
+        "cd" => "cd [directory]",
+        "ls" => "ls [directory]",
+        "cat" => "cat <file>",
+        "mkdir" => "mkdir <directory>",
+        "touch" => "touch <file>",
+        "cp" => "cp <source> <destination>",
+        "mv" => "mv <source> <destination>",
+        "rm" => "rm <file> [-r for directories]",
+        "grep" => "grep <pattern> <file>",
+        _ => "",
+    }
+}
+
+// Helper functions
+fn print_prompt(rl: &mut Editor<(), FileHistory>) -> Result<String, ReadlineError> {
+    let current_dir = env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .display()
+        .to_string();
+    
+    let prompt = format!("ASH$ {} > ", current_dir);
+    rl.readline(&prompt)
+}
+
+fn _read_input() -> String {
     let mut input = String::new();
-    io::stdin().read_line(&mut input).expect("Failed to read input");
+    io::stdin().read_line(&mut input).expect("Failed to read line");
     input.trim_end().to_string()
 }
+
 fn parse_input(input: &str) -> (&str, Vec<&str>) {
-    let tokens: Vec<&str> = input.split_whitespace().collect();
-    if tokens.is_empty() {
-        ("", vec![])
-    } else {
-        (tokens[0], tokens[1..].to_vec())
+    let mut parts = input.trim().split_whitespace();
+    let command = parts.next().unwrap_or("");
+    let args: Vec<&str> = parts.collect();
+    (command, args)
+}
+
+fn execute_command(command: &str, args: &[&str], rl: &mut Editor<(), FileHistory>) -> ShellResult<()> {
+    match command {
+        "" => Ok(()),
+        "exit" => exit(0),
+        "cd" => cd(args),
+        "help" => help(),
+        "ls" => ls(args),
+        "cat" => cat(args),
+        "mkdir" => mkdir(args),
+        "touch" => touch(args),
+        "rm" => rm(args),
+        "cp" => cp(args),
+        "mv" => mv(args),
+        "grep" => grep(args),
+        "pwd" => pwd(),
+        "echo" => echo(args),
+        "date" => date(),
+        "history" => show_history(rl),
+        _ => Err(ShellError::CommandNotFound(command.to_string())),
     }
 }
 
 // Command implementations
-fn cd(args: &[&str]) {
+fn cd(args: &[&str]) -> ShellResult<()> {
     let path = args.first().unwrap_or(&"");
-    let path = if path.is_empty() { 
-        env::var("HOME").unwrap() 
-    } else { 
-        path.to_string() 
+    let path = if path.is_empty() {
+        env::var("HOME").map_err(|_| ShellError::InvalidArgument("Home directory not found".into()))?
+    } else {
+        path.to_string()
     };
-    
-    if let Err(e) = env::set_current_dir(Path::new(&path)) {
-        eprintln!("cd: {}", e);
+
+    let path_buf = PathBuf::from(&path);
+    if !path_buf.exists() {
+        return Err(ShellError::FileNotFound(path));
     }
+    
+    env::set_current_dir(&path_buf)?;
+    Ok(())
 }
 
-fn help() {
+fn help() -> ShellResult<()> {
     println!("Implemented commands:");
     println!("  exit          - Exit the shell");
     println!("  cd [dir]      - Change directory");
@@ -83,149 +209,169 @@ fn help() {
     println!("  echo <text>   - Display message");
     println!("  date          - Show current date/time");
     println!("  help          - Show this help");
+    println!("  history       - Show command history");
+    Ok(())
 }
 
-fn ls(args: &[&str]) {
+fn ls(args: &[&str]) -> ShellResult<()> {
     let path = args.first().unwrap_or(&".");
-    match fs::read_dir(path) {
-        Ok(entries) => {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let fname = entry.file_name().into_string().unwrap();
-                    print!("{}  ", fname);
-                }
-            }
-            println!();
-        }
-        Err(e) => eprintln!("ls: {}", e),
+    let entries = fs::read_dir(path)?;
+    
+    for entry in entries {
+        let entry = entry?;
+        let fname = entry.file_name().into_string()
+            .map_err(|_| ShellError::InvalidArgument("Invalid filename".into()))?;
+        print!("{}  ", fname);
     }
+    println!();
+    Ok(())
 }
 
-fn cat(args: &[&str]) {
+fn cat(args: &[&str]) -> ShellResult<()> {
     if args.is_empty() {
-        eprintln!("cat: missing file operand");
-        return;
+        return Err(ShellError::MissingArguments("file"));
     }
     
     for file in args {
-        match fs::read_to_string(file) {
-            Ok(content) => print!("{}", content),
-            Err(e) => eprintln!("cat: {}: {}", file, e),
+        let metadata = fs::metadata(file)?;
+        if metadata.is_dir() {
+            return Err(ShellError::IsDirectory(file.to_string()));
         }
+        
+        let content = fs::read_to_string(file)?;
+        print!("{}", content);
     }
+    Ok(())
 }
 
-fn mkdir(args: &[&str]) {
+fn mkdir(args: &[&str]) -> ShellResult<()> {
     if args.is_empty() {
-        eprintln!("mkdir: missing operand");
-        return;
+        return Err(ShellError::MissingArguments("directory name"));
     }
     
     for dir in args {
-        if let Err(e) = fs::create_dir(dir) {
-            eprintln!("mkdir: {}: {}", dir, e);
-        }
+        fs::create_dir(dir)?;
     }
+    Ok(())
 }
 
-fn touch(args: &[&str]) {
+fn touch(args: &[&str]) -> ShellResult<()> {
     if args.is_empty() {
-        eprintln!("touch: missing file operand");
-        return;
+        return Err(ShellError::MissingArguments("file name"));
     }
     
     for file in args {
-        if let Err(e) = fs::File::create(file) {
-            eprintln!("touch: {}: {}", file, e);
-        }
+        let _ = fs::File::create(file)?;
     }
+    Ok(())
 }
 
-fn rm(args: &[&str]) {
+fn rm(args: &[&str]) -> ShellResult<()> {
     if args.is_empty() {
-        eprintln!("rm: missing operand");
-        return;
+        return Err(ShellError::MissingArguments("file or directory"));
     }
     
     for path in args {
-        let metadata = match fs::metadata(path) {
-            Ok(m) => m,
-            Err(_) => {
-                eprintln!("rm: {}: No such file or directory", path);
-                continue;
+        if *path == "-r" {
+            continue;
+        }
+        
+        let metadata = fs::metadata(path)
+            .map_err(|_| ShellError::FileNotFound(path.to_string()))?;
+        
+        if metadata.is_dir() {
+            if args.contains(&"-r") {
+                fs::remove_dir_all(path)?;
+            } else {
+                fs::remove_dir(path)?;
             }
-        };
-        
-        let result = if metadata.is_dir() {
-            fs::remove_dir(path)
         } else {
-            fs::remove_file(path)
-        };
-        
-        if let Err(e) = result {
-            eprintln!("rm: {}: {}", path, e);
+            fs::remove_file(path)?;
         }
     }
+    Ok(())
 }
 
-fn cp(args: &[&str]) {
+fn cp(args: &[&str]) -> ShellResult<()> {
     if args.len() < 2 {
-        eprintln!("cp: missing destination file operand");
-        return;
+        return Err(ShellError::MissingArguments("source and destination"));
     }
     
     let (src, dest) = (args[0], args[1]);
-    if let Err(e) = fs::copy(src, dest) {
-        eprintln!("cp: {}: {}", src, e);
+    
+    // Check if source exists
+    if !Path::new(src).exists() {
+        return Err(ShellError::FileNotFound(src.to_string()));
     }
+    
+    fs::copy(src, dest)?;
+    Ok(())
 }
 
-fn mv(args: &[&str]) {
+fn mv(args: &[&str]) -> ShellResult<()> {
     if args.len() < 2 {
-        eprintln!("mv: missing destination file operand");
-        return;
+        return Err(ShellError::MissingArguments("source and destination"));
     }
     
     let (src, dest) = (args[0], args[1]);
-    if let Err(e) = fs::rename(src, dest) {
-        eprintln!("mv: {}: {}", src, e);
+    
+    // Check if source exists
+    if !Path::new(src).exists() {
+        return Err(ShellError::FileNotFound(src.to_string()));
     }
+    
+    fs::rename(src, dest)?;
+    Ok(())
 }
 
-fn grep(args: &[&str]) {
+fn grep(args: &[&str]) -> ShellResult<()> {
     if args.len() < 2 {
-        eprintln!("grep: missing pattern or file");
-        return;
+        return Err(ShellError::MissingArguments("pattern and file"));
     }
     
     let (pattern, file) = (args[0], args[1]);
-    match fs::File::open(file) {
-        Ok(file) => {
-            let reader = io::BufReader::new(file);
-            for (i, line) in reader.lines().enumerate() {
-                if let Ok(line) = line {
-                    if line.contains(pattern) {
-                        println!("{}:{}: {}", args[1], i+1, line);
-                    }
-                }
-            }
+    
+    if !Path::new(file).exists() {
+        return Err(ShellError::FileNotFound(file.to_string()));
+    }
+    
+    let file_handle = fs::File::open(file)?;
+    let reader = io::BufReader::new(file_handle);
+    for (i, line) in reader.lines().enumerate() {
+        let line = line?;
+        if line.contains(pattern) {
+            println!("{}:{}: {}", file, i+1, line);
         }
-        Err(e) => eprintln!("grep: {}: {}", file, e),
     }
+    Ok(())
 }
 
-fn pwd() {
-    match env::current_dir() {
-        Ok(path) => println!("{}", path.display()),
-        Err(e) => eprintln!("pwd: {}", e),
-    }
+fn pwd() -> ShellResult<()> {
+    let path = env::current_dir()?;
+    println!("{}", path.display());
+    Ok(())
 }
 
-fn echo(args: &[&str]) {
+fn echo(args: &[&str]) -> ShellResult<()> {
     println!("{}", args.join(" "));
+    Ok(())
 }
 
-fn date() {
+fn date() -> ShellResult<()> {
     let now = Local::now();
     println!("{}", now.format("%Y-%m-%d %H:%M:%S"));
+    Ok(())
 }
+
+fn show_history(rl: &Editor<(), FileHistory>) -> ShellResult<()> {
+    let history = rl.history();
+    if history.is_empty() {
+        println!("No command history available");
+    } else {
+        for (idx, entry) in history.iter().enumerate() {
+            println!("{}: {}", idx + 1, entry);
+        }
+    }
+    Ok(())
+}
+
