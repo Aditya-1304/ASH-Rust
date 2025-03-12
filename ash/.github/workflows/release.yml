@@ -1,0 +1,38 @@
+name: Build Release Binaries
+
+# Trigger this workflow when a tag matching the version pattern is pushed
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build:
+    # Run on different operating systems
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      # Step 1: Checkout the repository
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      # Step 2: Set up the Rust toolchain
+      - name: Set up Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      # Step 3: Build the project in release mode
+      - name: Build project
+        run: cargo build --release
+
+      # Step 4: Upload the resulting binary as an artifact
+      - name: Upload binary
+        uses: actions/upload-artifact@v2
+        with:
+          name: ash-shell-${{ matrix.os }}
+          # Use a wildcard to catch both Linux/macOS (ash-shell) and Windows (ash-shell.exe)
+          path: target/release/ash-shell*
