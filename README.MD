@@ -43,7 +43,7 @@ If you prefer to build the shell from source on Linux:
 
 2. Clone this repository:
    ```bash
-   git clone https://github.com/adityakansara1/ASH-Rust.git
+   git clone https://github.com/Aditya-1304/ASH-Rust.git
    ```
 
 3. Build the project:
