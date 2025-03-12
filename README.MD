@@ -15,7 +15,7 @@ ASH Shell is a simple, custom command-line shell written in Rust. This shell sup
 
 1. **Download the Binary:**
 
-   Go to the [Releases](https://github.com/adityakansara1/ASH-Rust/releases) section of this repository and download the file `ash-shell-linux`.
+   Go to the [Releases](https://github.com/Aditya-1304/ASH-Rust/releases) section of this repository and download the file `ash-shell-linux`.
 
 2. **Make the Binary Executable:**
 
